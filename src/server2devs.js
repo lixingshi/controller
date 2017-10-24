@@ -452,7 +452,10 @@ function createOrderDir(devInfo) {
 }
 
 function pushRTSPStream(name) {
-
+    let devInfo = deviceMap.getForDevId(name)
+    if (!devInfo){
+        return
+    }
     var retry = 0
     const exec = require('child_process').exec;
     exec('ps -ef | grep ffmpeg',(error,stdout,stderr)=>{
@@ -461,10 +464,20 @@ function pushRTSPStream(name) {
 
         if (x == null){
             push(name)
+        }else{
+            setTimeout(()=> {
+                devInfo.cmd_takevideo(mConfig.auto_takevideo_duration)
+                //orderDone(devInfo, 2)
+            },1*1000)
         }
     })
 
     function push(name) {
+        let takeVideo = setTimeout(()=> {
+            devInfo.cmd_takevideo(mConfig.auto_takevideo_duration)
+            //orderDone(devInfo, 2)
+        },8*1000)
+
         setTimeout(()=>{
             const url = `rtsp://127.0.0.1:${mConfig.rtsp_server_port}/${name}.sdp`
             var mpeg1muxer = stream.startMpeg1Stream(url,name)
@@ -472,6 +485,7 @@ function pushRTSPStream(name) {
                 let reg = new RegExp('500 Internal Server Error')
                 let x = reg.exec(data.toString())
                 if (x != null){
+                    clearTimeout(takeVideo)
                     if (retry >= 10){
                         return
                     }
@@ -525,10 +539,10 @@ SocketEvent.prototype.dispatchSocketEvent = function (data) {
 
                     }else{
                         pushRTSPStream(devInfo.devId)
-                        setTimeout(()=> {
-                            devInfo.cmd_takevideo(mConfig.auto_takevideo_duration)
-                            //orderDone(devInfo, 2)
-                        },8*1000)
+                        // setTimeout(()=> {
+                        //     devInfo.cmd_takevideo(mConfig.auto_takevideo_duration)
+                        //     //orderDone(devInfo, 2)
+                        // },8*1000)
                     }
                 }else if (recall_split[1] == 'show-config'){
                     let x = cmd.removeBlank()[0].match(/\d{1}\s(.*)/)
@@ -634,7 +648,7 @@ SocketEvent.prototype.recieve_login_t1 = async function (devId,tm,sign) {
     devInfo.devId = devId
     devInfo.tm_heartbeat = Date.now()/1000
     deviceMap.set(devId,host,devInfo)
-    const re = await apiPhp.device_stat_t1(devId,1,devInfo.tm_heartbeat)
+    const re = await apiPhp.device_stat_t1(devId,1,parseInt(devInfo.tm_heartbeat))
 
     console.log("login "+re)
     if (JSON.parse(re)['stat'] == 'fail'){

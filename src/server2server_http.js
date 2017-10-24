@@ -68,10 +68,10 @@ async function sendCommand(query,pathName,res) {
     devInfo.taskId = orderIndex.index
 
     switch (pathName){
-        case '/command/sys_reset':
+        case '/command/sys-reset':
             suss =  devInfo.cmd_sys_reset()
             break;
-        case '/command/sys_config':
+        case '/command/sys-config':
 
             suss =  devInfo.cmd_sys_config(queryString.stringify(JSON.parse(query['param'])))
             break;

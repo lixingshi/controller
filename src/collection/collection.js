@@ -48,16 +48,20 @@ const util = require('../utils/util');
                 return
             } else if (op === 'add') {
                 let devId = query['devId'];
-                let tm = query['tm'];
+                let tm_stop = query['tm_stop'];
+                let repeat = query['repeat']
+                let tm_start = query['tm_start']
                 let duration = query['duration'];
-                if (devId == null || tm == null || duration == null) {
+                if (!devId || !tm_stop || !duration || !repeat || !tm_start) {
                     res.writeHead(404, {'Content-Type': 'text/plain;charset=utf-8'});
                     res.write('{"msg":"请求路径不存在","stat":"fail"}')
                     res.end()
                     return
                 }
                 let restrain = new Restrain()
-                restrain.tm = tm
+                restrain.tm_stop = tm_stop
+                restrain.tm_start = tm_start
+                restrain.repeat = (repeat || false) == 1 ? true : false
                 restrain.tm_ = parseInt(Date.now() / 1000) + parseInt(duration)
                 restrain.duration = duration
                 devRestrain.set(devId, restrain)
@@ -76,9 +80,11 @@ const util = require('../utils/util');
 
 
 function Restrain() {
-    this.tm = ''
+    this.tm_start = ''
+    this.tm_stop = ''
     this.tm_ = ''
     this.duration = ''
+    this.repeat = false
 }
 
 pool.connect((error,client)=>{
@@ -231,14 +237,27 @@ function collectAlertPicture(mPath,devId) {
         let tm = parseInt(Date.now() / 1000)
         let restrain = devRestrain.get(devId)
 
-        if (tm <= restrain.tm){
+        if (restrain.repeat && tm > restrain.tm_stop){
+            let day = 60*60*24
+            let dur = +tm - +restrain.tm_stop
+            let mul = parseInt(dur / day)
+            restrain.tm_start = +restrain.tm_start + (mul+1)*day
+            restrain.tm_stop = +restrain.tm_stop + (mul+1)*day
+            restrain.tm_ = +restrain.tm_start + +restrain.duration
+        }
+
+        if (tm >= restrain.tm_start &&tm <= restrain.tm_stop){
             if (tm >= (restrain.tm_ - restrain.duration) && tm <= restrain.tm_){
-                restrain.tm_ = parseInt(restrain.tm_) + parseInt(restrain.duration)
+                restrain.tm_ = +restrain.tm_ + +restrain.duration
+            }else if(tm>restrain.tm_&&tm <= restrain.tm_stop){
+                let dur = +tm - +restrain.tm_
+                let mul = parseInt(dur / restrain.duration)+1
+                restrain.tm_ = +restrain.tm_ + +restrain.duration*(mul+1)
             }else{
                 to_t_restrain()
                 return
             }
-        }else{
+        }else if (tm >= restrain.tm_stop){
             devRestrain.delete(devId)
         }
     }
