@@ -42,10 +42,10 @@ module.exports.formatDate = function () {
 
 module.exports.YMDDate2Number = function () {
     const date = new Date()
-    const time = date.getFullYear()+(parseInt((date.getMonth()+1)/10) == 0
+    const time = date.getFullYear()+''+(parseInt((date.getMonth()+1)/10) == 0
                                                                 ?'0'+(date.getMonth()+1)
                                                                 :(date.getMonth()+1))
-                                    +(parseInt(date.getDate()/10) == 0
+                                    +''+(parseInt(date.getDate()/10) == 0
                                                                 ?'0'+date.getDate()
                                                                 :date.getDate());
     return time

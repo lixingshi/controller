@@ -70,7 +70,27 @@ const util = require('../utils/util');
                 res.end()
             }
 
-        } else {
+        } else if(pathName == '/picture/detect'){
+            let devId = query['devId']
+            let imgPath = query['imgPath']
+            if (fs.existsSync(imgPath)){
+                cropAndSave(imgPath,devId,(state)=>{
+                    if (state){
+                        res.writeHead(200, {'Content-Type': 'text/plain;charset=utf-8'});
+                        res.write('{"msg":"操作成功","stat":"success"}')
+                        res.end()
+                    }else{
+                        res.writeHead(404, {'Content-Type': 'text/plain;charset=utf-8'});
+                        res.write('{"msg":"操作失败","stat":"fail"}')
+                        res.end()
+                    }
+                })
+            }else{
+                res.writeHead(404, {'Content-Type': 'text/plain;charset=utf-8'});
+                res.write('{"msg":"图片路径不存在","stat":"fail"}')
+                res.end()
+            }
+        }else {
             res.writeHead(404, {'Content-Type': 'text/plain;charset=utf-8'});
             res.write('{"msg":"请求路径不存在","stat":"fail"}')
             res.end()
@@ -246,7 +266,7 @@ function collectAlertPicture(mPath,devId) {
             restrain.tm_ = +restrain.tm_start + +restrain.duration
         }
 
-        if (tm >= restrain.tm_start &&tm <= restrain.tm_stop){
+        if (tm >= restrain.tm_start && tm <= restrain.tm_stop){
             if (tm >= (restrain.tm_ - restrain.duration) && tm <= restrain.tm_){
                 restrain.tm_ = +restrain.tm_ + +restrain.duration
             }else if(tm>restrain.tm_&&tm <= restrain.tm_stop){
@@ -280,6 +300,17 @@ function collectAlertPicture(mPath,devId) {
             if (results.rows == 0){
                 return
             }
+
+            let isErrorImage = await checkErrorImage(des,devId)
+            console.log('进入识别')
+            if (isErrorImage){
+                console.log('匹配')
+                fs.unlinkSync(des)
+                return
+            }else{
+                console.log('没有匹配')
+            }
+
 
             if (results.rows[0].is_cancel_alert){
                 fs.unlinkSync(des)
@@ -367,6 +398,201 @@ async function to_t_log(devId,imgPath) {
     }
     pool.query('insert into t_log (id_station,param,type,time_,obj,description) values ($1,$2,$3,$4,$5,$6)'
         ,[results.rows[0].id_station,imgPath,23,parseInt(Date.now()/1000),devId,`设备${devId}发现可疑逗留`])
+}
+
+function cropAndSave(imgPath,devId,callBack) {
+    let name = path.basename(imgPath)
+    let toPath = path.join(collectionConfig.file_base_path,devId,'dectect')
+    util.mkdirsSync(toPath)
+    let toFile = path.join(toPath,name)
+    exec(`python ./src/collection/crop.py ${imgPath} ${toFile}`,(err,stdout,stderr)=>{
+        if (!err){
+            let [_start,_end] = String(stdout).split(';');
+            let [start_x,start_y] = _start.split(' ');
+            let [end_x,end_y] = _end.split(' ');
+            let area = (+end_y - +start_y)*(+end_x - +start_x)
+            pool.query('insert into t_detect (id_device,img_path,origin_point,end_point,area) values ($1,$2,$3,$4,$5)'
+                ,[devId,toFile,`${start_x},${start_y}`,`${end_x},${end_y}`,area])
+
+            callBack(true)
+        }else{
+            callBack(false)
+        }
+    })
+
+}
+
+function checkFilterTime(){
+    let h = new Date().getHours()
+
+    if (18 > +h && 6 < +h){
+        return true
+    }else {
+        return false
+
+    }
+}
+
+function checkErrorImage(imgPath,devId) {
+    return new Promise(async(resolve,reject)=>{
+        const results = await pool.query('select * from t_detect where id_device=$1',[devId])
+
+        if(results.rows.length){
+            let name = path.basename(imgPath)
+            let toPath = path.join(collectionConfig.file_base_path,devId,'temp')
+            util.mkdirsSync(toPath)
+            let toFile = path.join(toPath,name)
+
+            exec(`python ./src/collection/crop.py ${imgPath} ${toFile}`,(err,stdout,stderr)=>{
+                if (!err){
+                    let [_start,_end] = String(stdout).split(';');
+                    let [start_x,start_y] = _start.split(' ');
+                    let [end_x,end_y] = _end.split(' ');
+                    let area = (+end_y - +start_y)*(+end_x - +start_x)
+
+                    let mIndex=0,crossArea=0,remianArea=1000000;
+
+                    for (let i=0;i<results.rows.length;i++){
+                        let [c_start_x,c_start_y] = results.rows[i]['origin_point'].split(',')
+                        let [c_end_x,c_end_y] = results.rows[i]['end_point'].split(',')
+                        let c_area = (+c_end_y - +c_start_y)*(+c_end_x - +c_start_x)
+                        if (+start_x >= +c_end_x){
+                            continue;
+                        }
+
+                        let _area = checkImgeRect(+start_x,+start_y,+end_x,+end_y,+c_start_x,+c_start_y,+c_end_x,+c_end_y,+area,+c_area)
+
+                        if (_area){
+                            console.log('—area  ,area,c_area '+_area,area,c_area)
+                            if (+start_x >= +c_start_x && +end_x <= +c_end_x && +start_y >= +c_start_y && +end_y <= +c_end_y){
+                                if (c_area - _area < remianArea){
+                                    mIndex = i;
+                                    crossArea = _area;
+                                    remianArea = c_area - _area
+                                }
+                            }else{
+                                if (area - _area < remianArea){
+                                    mIndex = i;
+                                    crossArea = _area;
+                                    remianArea = area - _area
+                                }
+                            }
+
+                        }
+                    }
+
+                    console.log('对比图:'+mIndex,crossArea,remianArea)
+
+                    if (crossArea){
+                        let [c_start_x,c_start_y] = results.rows[mIndex]['origin_point'].split(',')
+                        let [c_end_x,c_end_y] = results.rows[mIndex]['end_point'].split(',')
+                        let c_area = (+c_end_y - +c_start_y)*(+c_end_x - +c_start_x)
+                        if (+start_x >= +c_start_x && +end_x <= +c_end_x && +start_y >= +c_start_y && +end_y <= +c_end_y){
+                            if (remianArea <= c_area/4){
+                                fs.unlinkSync(toFile)
+                                resolve(true)
+                                return
+                            }
+
+                        }else{
+                            if (remianArea <= area/4){
+                                fs.unlinkSync(toFile)
+                                resolve(true)
+                                return
+                            }
+
+                        }
+
+                        fs.unlinkSync(toFile)
+                        resolve(false)
+                        // exec(`python ./src/collection/compare.py ${toFile} ${results.rows[mIndex]['img_path']}`,(err,stdout,stderr)=>{
+                        //     if (!err){
+                        //         console.log('特征识别：   '+toFile,results.rows[mIndex]['img_path'])
+                        //         let result = parseInt(stdout)
+                        //         if (result){
+                        //             resolve(true)
+                        //         }else{
+                        //             fs.unlinkSync(toFile)
+                        //             resolve(false)
+                        //         }
+                        //     }else{
+                        //         console.log(err)
+                        //         fs.unlinkSync(toFile)
+                        //         resolve(false)
+                        //     }
+                        // })
+                    }else{
+                        fs.unlinkSync(toFile)
+                        resolve(false)
+                    }
+
+                }else{
+                    console.log(err)
+                    fs.unlinkSync(toFile)
+                    resolve(false)
+                }
+
+            })
+
+        }else{
+            resolve(false)
+        }
+
+    })
+}
+
+function checkImgeRect(x1,y1,x2,y2,x3,y3,x4,y4,area2_wait,area_comp){
+    if (Math.abs(area_comp-area2_wait)>Math.max(area_comp,area2_wait)/3){
+        return 0
+    }
+
+    let crossArea = 0
+
+    if (x1<=x4 && x2>=x3 && y2>=y3 && y1<=y4){
+        if (x1<=x3 && x2<=x4){
+            if (y3>=y1 && y2>=y4){
+                crossArea = (+y4 - +y3)*(+x2 - +x3)
+            }else{
+                crossArea = (+x2 - +x3)*(+y2 - +y3)
+            }
+        }else if (x1>=x3 && x2>=x4){
+            if (y3>=y1 && y2>=y4){
+                crossArea = (+y4 - +y3)*(+x4 - +x1)
+            }else{
+                crossArea = (+x4 - +x1)*(+y2 - +y3)
+            }
+        }else if (x1>=x3 && x2<=x4){
+            if (y3>=y1 && y2>=y4){
+                crossArea = (+x2 - +x1)*(+y4 - +y3)
+            }else if (y1>=y3 && y2<=y4){
+                crossArea = (+x4 - +x3)*(+y4 - +y3)
+            }
+
+        }else if (x1<=x3 && x2>=x4){
+            if (y3>=y1 && y2<=y4){
+                crossArea = (+x4 - +x3)*(+y2 - +y3)
+            }else if (y3<=y1 && y2>=y4){
+                crossArea = (+x4 - +x3)*(+y4 - +y1)
+            }else if (y3<=y1 && y2<=y4){
+                crossArea = (+x4 - +x2)*(+y2 - +y1)
+            }else if (y3>=y1 && y2>=y4){
+                crossArea = (+x4 - +x1)*(+y4 - +y3)
+            }
+        }
+
+        console.log('checkImgeRect  crossArea '+crossArea)
+        console.log(x1,y1,x2,y2,x3,y3,x4,y4)
+
+        // if ((crossArea / +area_comp)<=1.3 && (crossArea / +area_comp)>=0.7){
+        //     return crossArea
+        // }else{
+        //     return 0
+        // }
+        return crossArea
+
+    }else{
+        return 0
+    }
 }
 
 })()

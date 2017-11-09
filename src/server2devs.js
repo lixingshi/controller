@@ -514,7 +514,7 @@ SocketEvent.prototype.dispatchSocketEvent = function (data) {
         const devInfo = deviceMap.getForHost(host)
         if (cmd.length > 1){
             //接受指令执行结果
-            if (devInfo == null){
+            if (!devInfo){
                 this.socket.destroy();
                 console.log("非法连接，已关闭");
             }
@@ -546,12 +546,12 @@ SocketEvent.prototype.dispatchSocketEvent = function (data) {
                     }
                 }else if (recall_split[1] == 'show-config'){
                     let x = cmd.removeBlank()[0].match(/\d{1}\s(.*)/)
-                    if (x != null){
+                    if (x){
                         apiPhp.device_config(devInfo.devId,x[1])
                     }
                 }else if (recall_split[1] == 'show-hd-info'){
                     let x = cmd.removeBlank()[0].match(/\d{1}\s(.*)/)
-                    if (x != null){
+                    if (x){
                         apiPhp.device_stat(devInfo.devId,null,null,null,null,null,null,null,null,x[1])
                     }
                 }
@@ -669,7 +669,7 @@ SocketEvent.prototype.recieve_login_t1 = async function (devId,tm,sign) {
 SocketEvent.prototype.recieve_heartbeat = async function (longitude,latitude,sys_ver,res_ver) {
     const host = this.socket.remoteAddress.split(':').pop()+':'+this.socket.remotePort
     const devInfo = deviceMap.getForHost(host)
-    if (devInfo != null){
+    if (devInfo){
 
         devInfo.tm_heartbeat = Date.now() / 1000
 
@@ -697,7 +697,7 @@ SocketEvent.prototype.recieve_heartbeat = async function (longitude,latitude,sys
 SocketEvent.prototype.recieve_heartbeat_t1 = async function (tm) {
     const host = this.socket.remoteAddress.split(':').pop()+':'+this.socket.remotePort
     const devInfo = deviceMap.getForHost(host)
-    if (devInfo == null){
+    if (!devInfo){
         this.socket.destroy();
         return
     }else{
