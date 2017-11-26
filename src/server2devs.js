@@ -33,8 +33,8 @@ const liveMap = new Map();
 startValidateOnlineTimer()
 
 module.exports.server = net.createServer((socket) => {
-    console.log(socket);
-    console.log('client connected '+socket.remoteAddress)
+    // console.log(socket);
+    // console.log('client connected '+socket.remoteAddress)
     if(!socket.remoteAddress){
         socket.destroy()
         return;
@@ -506,7 +506,7 @@ function SocketEvent(socket) {
 }
 
 SocketEvent.prototype.dispatchSocketEvent = function (data) {
-    console.log('recieve  '+ data.toString())
+    // console.log('recieve  '+ data.toString())
     const items = data.toString().split('\r\n').removeBlank()
     items.forEach((item,index,array)=>{
         const cmd = item.split('>>')

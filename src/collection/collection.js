@@ -74,14 +74,14 @@ const util = require('../utils/util');
             let devId = query['devId']
             let imgPath = query['imgPath']
             if (fs.existsSync(imgPath)){
-                cropAndSave(imgPath,devId,(state)=>{
+                cropAndSave(imgPath,devId,(state,err)=>{
                     if (state){
                         res.writeHead(200, {'Content-Type': 'text/plain;charset=utf-8'});
                         res.write('{"msg":"操作成功","stat":"success"}')
                         res.end()
                     }else{
                         res.writeHead(404, {'Content-Type': 'text/plain;charset=utf-8'});
-                        res.write('{"msg":"操作失败","stat":"fail"}')
+                        res.write(`{"msg":${err ||'操作失败'},"stat":"fail"}`)
                         res.end()
                     }
                 })
@@ -245,8 +245,8 @@ function collectTask(mPath,devId,taskId) {
 function collectAlertPicture(mPath,devId) {
     const parsePath = path.parse(mPath)
     const res = path.resolve(collectionConfig.ftp_base_path,mPath)
-    const currentPath = path.resolve('/'+parsePath.dir,'./'+util.YMDDate2Number(),'./'+parsePath.name+'.'+collectionConfig.transform_picture_suffix.split('.').removeBlank()[0]);
-    const des = path.resolve(collectionConfig.file_base_path,parsePath.dir,'./'+util.YMDDate2Number(),'./'+parsePath.name+'.'+collectionConfig.transform_picture_suffix.split('.').removeBlank()[0]);
+    let currentPath = path.resolve('/'+parsePath.dir,'./'+util.YMDDate2Number(),'./'+parsePath.name+'.'+collectionConfig.transform_picture_suffix.split('.').removeBlank()[0]);
+    let des = path.resolve(collectionConfig.file_base_path,parsePath.dir,'./'+util.YMDDate2Number(),'./'+parsePath.name+'.'+collectionConfig.transform_picture_suffix.split('.').removeBlank()[0]);
     const dirname = path.dirname(des)
 
     const spl = path.basename(res,parsePath.ext).split('_').removeBlank()
@@ -301,21 +301,28 @@ function collectAlertPicture(mPath,devId) {
                 return
             }
 
-            let isErrorImage = await checkErrorImage(des,devId)
-            console.log('进入识别')
-            if (isErrorImage){
-                console.log('匹配')
-                fs.unlinkSync(des)
-                return
-            }else{
-                console.log('没有匹配')
-            }
-
-
             if (results.rows[0].is_cancel_alert){
                 fs.unlinkSync(des)
                 return
             }
+
+            // let isErrorImage = await checkErrorImage(des,devId)
+            // console.log('进入识别')
+            // if (isErrorImage){
+            //     console.log('匹配')
+            //     fs.unlinkSync(des)
+            //     return
+            // }else{
+            //     console.log('没有匹配')
+            // }
+
+            let im = await filterImage(des,currentPath)
+            if (!im){
+                console.log('tuichu')
+                fs.unlinkSync(des)
+                return
+            }
+
             validateStaying.validate(devId,parseInt(Date.now()/1000),des)
 
             const position = results.rows[0].position
@@ -324,8 +331,8 @@ function collectAlertPicture(mPath,devId) {
             let id_station = results.rows[0].id_station
             const desc = '终端编号为'+devId+'的机器在'+position+'发现可疑目标，时间为'+time
 
-            if (spl.length == 3){
-                const name = spl[2].split(',').removeBlank()
+            if (spl.length == 4){
+                const name = spl[3].split(',').removeBlank()
                 const lon = name[0]
                 const lat = name[1]
                 if (parseInt(lon) != 0 && parseInt(lat) != 0){
@@ -333,6 +340,7 @@ function collectAlertPicture(mPath,devId) {
                     latitude = lat
                 }
             }
+
             const sql = pool.query(`insert into t_caution (id_device,id_station,img_url,time_,status,description,longitude,latitude,position,geom) values ('${devId}','${id_station}','${currentPath}','${time}',0,'${desc}','${longitude}','${latitude}','${position}',st_geomfromtext('POINT(${longitude} ${latitude})',4326))`);
             pool.query(sql)
 
@@ -368,8 +376,8 @@ function collectAlertPicture(mPath,devId) {
             let id_station = results.rows[0].id_station
             const desc = '终端编号为'+devId+'的机器在'+position+'发现可疑目标，时间为'+time
 
-            if (spl.length == 3){
-                const name = spl[2].split(',').removeBlank()
+            if (spl.length == 4){
+                const name = spl[3].split(',').removeBlank()
                 const lon = name[0]
                 const lat = name[1]
                 if (parseInt(lon) != 0 && parseInt(lat) != 0){
@@ -400,8 +408,51 @@ async function to_t_log(devId,imgPath) {
         ,[results.rows[0].id_station,imgPath,23,parseInt(Date.now()/1000),devId,`设备${devId}发现可疑逗留`])
 }
 
-function cropAndSave(imgPath,devId,callBack) {
+function filterImage(imgPath,outP) {
+    return new Promise((resolve,reject)=> {
+        let name = path.basename(imgPath)
+
+        let area_str = name.split('_').removeBlank()[0].split(':').removeBlank()
+        let area = 0;
+        if (area_str.length == 4){
+            area = `${area_str[0]}:${area_str[1]}:${area_str[2]}:${area_str[3]}`
+        }
+
+        exec(`cd /home/petrochina/manageragent/darknet/ && ./darknet detect cfg/yolo.cfg yolo.weights ${imgPath} -out ${imgPath} -area ${area}`, (err, stdout, stderr) => {
+            if (err){
+                console.log(err)
+                resolve(false)
+                return
+            }
+            console.log(stdout)
+            let m = stdout.match(/%:.*|&:.*/g)
+            if (m){
+                resolve(true)
+            }else{
+                resolve(false)
+            }
+
+        })
+    })
+}
+
+async function cropAndSave(imgPath,devId,callBack) {
     let name = path.basename(imgPath)
+    let sta = false
+    const results = await pool.query('select * from t_detect where id_device=$1',[devId])
+    if (results.rows.length){
+        results.rows.forEach((row,index,arr)=>{
+            let name_ = path.basename(row['img_path'])
+            if (name == name_){
+                callBack(false,"别重复提交")
+                sta = true
+            }
+        })
+    }
+
+    if (sta){
+        return
+    }
     let toPath = path.join(collectionConfig.file_base_path,devId,'dectect')
     util.mkdirsSync(toPath)
     let toFile = path.join(toPath,name)
@@ -411,8 +462,9 @@ function cropAndSave(imgPath,devId,callBack) {
             let [start_x,start_y] = _start.split(' ');
             let [end_x,end_y] = _end.split(' ');
             let area = (+end_y - +start_y)*(+end_x - +start_x)
-            pool.query('insert into t_detect (id_device,img_path,origin_point,end_point,area) values ($1,$2,$3,$4,$5)'
-                ,[devId,toFile,`${start_x},${start_y}`,`${end_x},${end_y}`,area])
+            let tm = parseInt(Date.now() / 1000);
+            pool.query('insert into t_detect (id_device,img_path,origin_point,end_point,area,time_) values ($1,$2,$3,$4,$5,$6)'
+                ,[devId,toFile,`${start_x},${start_y}`,`${end_x},${end_y}`,area,tm])
 
             callBack(true)
         }else{
@@ -488,11 +540,10 @@ function checkErrorImage(imgPath,devId) {
                         let [c_end_x,c_end_y] = results.rows[mIndex]['end_point'].split(',')
                         let c_area = (+c_end_y - +c_start_y)*(+c_end_x - +c_start_x)
                         if (+start_x >= +c_start_x && +end_x <= +c_end_x && +start_y >= +c_start_y && +end_y <= +c_end_y){
-                            if (remianArea <= c_area/4){
-                                fs.unlinkSync(toFile)
-                                resolve(true)
-                                return
-                            }
+
+                            fs.unlinkSync(toFile)
+                            resolve(true)
+                            return
 
                         }else{
                             if (remianArea <= area/4){
